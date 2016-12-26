@@ -1,4 +1,4 @@
-function idt = idt_hp(P,T,COMP)
+function idt = idt_hp_gri30(P,T,COMP)
 %  IGNITE_HP   Solves the same ignition problem as 'ignite', but uses function
 %  conhp instead of reactor. 
 %
@@ -9,7 +9,7 @@ if nargin == 0
     T = 1234.03;
 end
 
-gas = IdealGasMix('H2Reaction_Konnov.xml');
+gas = IdealGasMix('grimech30.xml');
 mw = molecularWeights(gas);
 
 set(gas,'T',T,'P', P*oneatm,'X',COMP);

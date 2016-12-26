@@ -1,4 +1,4 @@
-function [t_ext, TEMP_ext] = psr_extinction(P_in, T_in, COMP, Omega_init, index, factor) 
+function [t_ext, TEMP_ext, TEMP_init, niter] = psr_extinction(gas,P_in, T_in, COMP, Omega_init) 
     % ///////////////////////////////////////////////////////////////////
     % PSR: PERFECTLY STIRRED REACTOR
     % 
@@ -36,53 +36,46 @@ function [t_ext, TEMP_ext] = psr_extinction(P_in, T_in, COMP, Omega_init, index,
     % C  where k and k-1 denote the previous two computed points.
     % C The default value for the reference values are 1. And we employ ddasac to solve the above DAEs.
     % /////////////////////////////////////////////////////////////////////////////////////
-
-    gas = IdealGasMix('H2Reaction_Konnov.xml');   
-    if nargin == 0
-        COMP = 'H2:2,O2:1,N2:3.76';
-        P_in = 1.0;
-        T_in = 700.0;
-        Omega_init = 1./(1E-5);
-        index = [13,  29];
-        factor = [1 1];
-    end
-    %% PARA
-%     Omega_init = 1./(2E-5);
-    Omega_max = 1e+8;
-    reso = 2e-1;
-    nmax = 30000;
     
-%     T_in =300.0;
-%     P_in = 1.0;
-%     COMP = 'H2:2,O2:1,N2:3.76';
+%     gas = IdealGasMix('H2Reaction_Konnov.xml');   
+    if nargin == 0
+        gas = IdealGasMix('H2Reaction_Konnov.xml');   
+%         gas = IdealGasMix('H2_Li.cti');   
+        COMP = 'H2:2,O2:1,N2:3.76';
+        P_in = 30.0;
+        T_in = 300.0;
+        Omega_init = 1./(1.E-5);
+    end
+%     setMultiplier(gas, index, factor)
+    %% para
+    Omega_max = 1e+8;
+    reso = 2.0;
+    nmax = 50000;
     set(gas,'T',T_in,'P', P_in*oneatm,'X',COMP);
-
     global yin nsp mw;
     mw = molecularWeights(gas);
     nsp = nSpecies(gas);
     yin = [massFractions(gas); enthalpy_mass(gas)];
     
-    setMultiplier(gas, index, factor)
-    
-    %% EQUILIBRIUM
+    %% equilibrium
     equilibrate(gas,'HP');
     % tad = temperature(gas);
     y0 = [massFractions(gas); enthalpy_mass(gas)];
-
     %% Solve initial points
     y1 = func_unsteady_psr(gas, y0, Omega_init);
     y2 = func_unsteady_psr(gas, y0, Omega_init*1.01);
     y3 = func_unsteady_psr(gas, y0, Omega_init*1.02);
-
+    TEMP_init = y1(end);
+    
     %% Arc-length Continuation
     global yref  Tref  Omega_ref; 
     yref = 1.; Tref = 1.; Omega_ref = 1.;
 
     OUT = zeros(nmax, nsp+3 );
-    % fprintf( 'niter\t t_res[1/s]\t TEMP[K]\n');
+%     fprintf( 'niter\t t_res[1/s]\t TEMP[K]\n');
     niter = 0; 
     t0 = cputime;
-
+        
     while( niter < nmax && y3(1) < Omega_max)
         niter = niter +1;
         xx1 = [y1(2:nsp+1)/yref; y1(nsp+3)/Tref; log(y1(1)/Omega_ref) ];
@@ -103,12 +96,11 @@ function [t_ext, TEMP_ext] = psr_extinction(P_in, T_in, COMP, Omega_init, index,
         ds = max(ds, 1e-6);
 
         ds = ds*exp(-1);
-        s = 0.; sout = ds;
-
+        s0 = 0.;   sout = ds;
         y0 = y3;
         y0(nsp+3) = y3(1);
         y0(1) = gslope'*xx3;
-
+   
         yprime = 0*y0;
         yprime(1) = 1.0;
         M = zeros( nsp+3 );
@@ -116,7 +108,7 @@ function [t_ext, TEMP_ext] = psr_extinction(P_in, T_in, COMP, Omega_init, index,
         % Disable the tolerence setting if it is hard to converge
         %options = odeset('RelTol',1.e-5,'AbsTol',1.e-12,'Stats','off','mass', M, 'InitialSlope', yprime);
         options = odeset('mass', M, 'InitialSlope', yprime);
-        tel = [s sout];
+        tel = [s0 sout];
         out = ode15s(@func_psr_dae, tel, y0, options, gas, gslope);
         y = out.y(:,end);
         y = [y(nsp+3,end);  y(2:nsp+2,end);  temphy(gas, y(2:nsp+2))];
@@ -124,8 +116,7 @@ function [t_ext, TEMP_ext] = psr_extinction(P_in, T_in, COMP, Omega_init, index,
         y1 = y2;
         y2 = y3;
         y3 = y;
-    %     fprintf( '%i\t%.6e\t%.2f\n', niter, 1./y3(1), y3(end));
-
+%         fprintf( '%i\t%.6e\t%.2f\n', niter, 1./y3(1), y3(end));
         if( OUT(niter, 1) < OUT(max(niter-1,1), 1))
             break;
         end
@@ -135,8 +126,8 @@ function [t_ext, TEMP_ext] = psr_extinction(P_in, T_in, COMP, Omega_init, index,
     OUT(niter+1:end, :) = [];
     t_ext = 1./OUT(max(niter-1,1), 1);
     TEMP_ext = OUT(max(niter-1,1), end);
-    fprintf( '%i\t %.6e\t %.2f\n', niter-1, t_ext, TEMP_ext);
-
+%     fprintf( '%i\t %.6e\t %.2f\n', niter-1, t_ext, TEMP_ext);
+    
     if 0
         %plot temperature verus residence time
         figure(1);
@@ -151,40 +142,34 @@ function [t_ext, TEMP_ext] = psr_extinction(P_in, T_in, COMP, Omega_init, index,
         y1_txt = (max(OUT(:,end)) + min(OUT(:,end)))/2;
         text(x1_txt, y1_txt, txt1);
         hold all;
-        %plot temperature verus Omega (Mixing frequency)
-        %     figure;
-        %     h = semilogx( OUT(:,1) , OUT(:,end), 'o-'  );
-        %     xlabel('\it Omega (1/s)');
-        %     ylabel( '\it T_{max} (K)' );
-        %     title([COMP, ' T=', int2str(T_in), 'K',' P=',int2str(P_in),'atm' ])
-        %     set(h, 'LineWidth', 1);
-        %     hold all;
     end
+    
 end
 
 function temp = temphy(gas, y)
     % return temperatrue given H and massfraction
     %y(1:nsp+1)
-    setMassFractions(gas, y(1:end-1), 'nonorm');
-    set(gas,'H',y(end),'P',pressure(gas));
+    global nsp;
+    set(gas,'H',y(nsp+1),'P',pressure(gas), 'Y',y(1:nsp), 'nonorm');
     temp = temperature(gas);
 end
 
 function y = func_unsteady_psr(gas, y0, Omega)
+    % function for computing unsteady psr
     global nsp;
-
     options = odeset('RelTol',1.e-5,'AbsTol',1.e-12,'Stats','off');
-    tel = [0 20/Omega];
+    tel = [0 1/Omega];
     out = ode15s(@func_psr_ode,tel,y0,options, Omega, gas); %pass extra paras
     y = out.y(:,end);
     y = [Omega; y; temphy(gas, y(1:nsp+1))];
 end
 
 function dydt = func_psr_ode( t, y, Omega, gas) %#ok<INUSL>
+    % function that contaning the ode for psr
+    % function that used in func_unsteady_psr
     global yin nsp mw;
     % Set the state of the gas, based on the current solution vector.
-    setMassFractions(gas, y(1:nsp), 'nonorm');
-    set(gas,'H',y(nsp+1),'P',pressure(gas));
+    set(gas,'H',y(nsp+1),'P',pressure(gas), 'Y',y(1:nsp), 'nonorm');
     % energy equation
     rrho = 1.0/density(gas);
     wdot = netProdRates(gas);
@@ -197,9 +182,7 @@ function dydt = func_psr_dae( t, y, gas, gslope) %#ok<INUSL>
     global yref  Tref  Omega_ref; 
     global yin nsp mw;
     % Set the state of the gas, based on the current solution vector.
-    nsp = nSpecies(gas);
-    setMassFractions(gas, y(2:nsp+1), 'nonorm');
-    set(gas,'H',y(nsp+2),'P',pressure(gas));
+    set(gas,'H',y(nsp+2),'P',pressure(gas), 'Y',y(2:nsp+1), 'nonorm');
     TEMP = temperature(gas);
     xx = [y(2:nsp+1)/yref; TEMP/Tref; log( y(nsp+3)/Omega_ref )];
     % Energy equation

@@ -1,4 +1,4 @@
-function idt = idt_hp(P,T,COMP)
+function IDT = idt_hp_uq(P, T, COMP, X, t_end)
 %  IGNITE_HP   Solves the same ignition problem as 'ignite', but uses function
 %  conhp instead of reactor. 
 %
@@ -7,25 +7,40 @@ if nargin == 0
     COMP = 'H2:2,O2:1,N2:3.76';
     P = 1;
     T = 1234.03;
+    index = [1:nrxn];
+    m = length(index); 
+    sigma = readrateuq(index);
+    %      Generate one-d samples
+    r = generate_sample(1, 1000, 2);
+    sigma_r = sigma' .* x;
+    X = r*sigma_r/2;
+    t_end = 1;
 end
 
-gas = IdealGasMix('H2Reaction_Konnov.xml');
-mw = molecularWeights(gas);
+[rows, cols] = size(X);
+IDT = zeros(rows,1);
 
-set(gas,'T',T,'P', P*oneatm,'X',COMP);
+for i = 1:rows
+    gas = IdealGasMix('H2Reaction_Konnov.xml');
+    mw = molecularWeights(gas);
+    disp(i);
+    for j = 1:2
+        setMultiplier(gas, j, 2 );
+    end
+    set(gas,'T',T,'P', P*oneatm,'X',COMP);
 
-y0 = [temperature(gas); massFractions(gas)];
-tel = [0 1.e-0];
-options = odeset('RelTol',1.e-8,'AbsTol',1.e-12,'Stats','off');
-out = ode15s(@conhp,tel,y0,options,gas,mw);
-[~, idt_index] = max( diff(out.y(1,:))./diff(out.x) );
-idt = out.x(idt_index);
+    y0 = [temperature(gas); massFractions(gas)];
+    tel = [0 t_end];
+    options = odeset('RelTol',1.e-8,'AbsTol',1.e-12,'Stats','off');
+    out = ode15s(@conhp,tel,y0,options,gas,mw);
+    [~, idt_index] = max( diff(out.y(1,:))./diff(out.x) );
+    IDT(i) = log10( out.x(idt_index) );
+    
+    % disp( ['ignition @ ', num2str(idt), ' s'] );
 
-% disp( ['ignition @ ', num2str(idt), ' s'] );
-
-if out.y(1,idt_index) < T+100
-    disp( ['no ignition @Tin=', num2str(T)] );
-end
+    if out.y(1,idt_index) < T+100
+        disp( ['no ignition @Tin=', num2str(T)] );
+    end
 
     if 0
        % plot the temperature and OH mole fractions.
@@ -42,6 +57,8 @@ end
        ylabel('Mass Fraction');
        title('OH Mass Fraction');   
     end
+    
+end
 %     toc;
 end
 
